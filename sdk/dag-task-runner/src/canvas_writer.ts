@@ -10,7 +10,8 @@
 
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { Complexity, DAG } from "./dag.js";
+import type { Complexity, DAG, SdkModelPick } from "./dag.js";
+import { formatDagModelPickForUi } from "./dag.js";
 
 export type TaskStatus = "PENDING" | "RUNNING" | "FINISHED" | "ERROR";
 
@@ -39,7 +40,10 @@ export interface RunState {
   tasks: TaskState[];
 }
 
-export function initialRunState(dag: DAG, modelFor: (c: Complexity) => string): RunState {
+export function initialRunState(
+  dag: DAG,
+  modelFor: (c: Complexity) => SdkModelPick,
+): RunState {
   return {
     title: dag.title,
     startedAt: Date.now(),
@@ -49,7 +53,7 @@ export function initialRunState(dag: DAG, modelFor: (c: Complexity) => string): 
       complexity: t.complexity,
       subtask_prompt: t.subtask_prompt,
       status: "PENDING",
-      model: modelFor(t.complexity),
+      model: formatDagModelPickForUi(modelFor(t.complexity)),
     })),
   };
 }

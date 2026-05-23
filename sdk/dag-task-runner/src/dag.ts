@@ -5,7 +5,11 @@
  */
 
 export type Complexity = "HIGH" | "MED" | "LOW";
-export type ModelMap = Record<Complexity, string>;
+/** Complexity slot value as written to `models.json` (runner + admin). */
+export type SdkModelPick =
+  | string
+  | { id: string; params?: Array<{ id: string; value: string }> };
+export type ModelMap = Record<Complexity, SdkModelPick>;
 export type ModelMapOverride = Partial<ModelMap>;
 
 export interface RawTask {
@@ -198,17 +202,64 @@ export function validateModelMap(raw: unknown, label = "model map"): ModelMapOve
     if (!COMPLEXITY_VALUES.has(key as Complexity)) {
       throw new Error(`${label} contains unknown complexity key: ${key}`);
     }
-    if (typeof value !== "string" || value.trim() === "") {
-      throw new Error(`${label}.${key} must be a non-empty string.`);
-    }
-    models[key as Complexity] = value.trim();
+    models[key as Complexity] = validateModelPick(value, `${label}.${key}`);
   }
   return models;
 }
 
-export function createModelResolver(overrides: ModelMapOverride = {}): (c: Complexity) => string {
+/** Human label for canvas nodes (stored as `TaskState.model`). */
+export function formatDagModelPickForUi(pick: SdkModelPick): string {
+  if (typeof pick === "string") return pick;
+  const base = pick.id;
+  if (!pick.params?.length) return base;
+  return `${base} (${pick.params.map((p) => `${p.id}=${p.value}`).join(", ")})`;
+}
+
+/** Cursor SDK Agent `model` field from a slot value. */
+export function sdkModelShapeFromDagPick(pick: SdkModelPick): {
+  id: string;
+  params?: Array<{ id: string; value: string }>;
+} {
+  if (typeof pick === "string") return { id: pick };
+  const out: { id: string; params?: Array<{ id: string; value: string }> } = { id: pick.id };
+  if (pick.params?.length) out.params = pick.params;
+  return out;
+}
+
+function validateModelPick(raw: unknown, path: string): SdkModelPick {
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    if (!s) throw new Error(`${path} must be a non-empty string`);
+    return s;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`${path} must be a string or an object with id`);
+  }
+  const obj = raw as Record<string, unknown>;
+  const id = typeof obj.id === "string" ? obj.id.trim() : "";
+  if (!id) throw new Error(`${path}.id must be a non-empty string`);
+
+  let params: Array<{ id: string; value: string }> | undefined;
+  if (obj.params !== undefined) {
+    if (!Array.isArray(obj.params)) {
+      throw new Error(`${path}.params must be an array when present`);
+    }
+    const norm: Array<{ id: string; value: string }> = [];
+    for (const p of obj.params) {
+      if (!p || typeof p !== "object" || Array.isArray(p)) continue;
+      const pr = p as Record<string, unknown>;
+      const pid = typeof pr.id === "string" ? pr.id.trim() : "";
+      const val = typeof pr.value === "string" ? pr.value.trim() : "";
+      if (pid && val) norm.push({ id: pid, value: val });
+    }
+    if (norm.length) params = norm;
+  }
+  return params ? { id, params } : { id };
+}
+
+export function createModelResolver(overrides: ModelMapOverride = {}): (c: Complexity) => SdkModelPick {
   const models: ModelMap = { ...DEFAULT_MODEL_MAP, ...overrides };
-  return (c: Complexity): string => {
+  return (c: Complexity): SdkModelPick => {
     if (!COMPLEXITY_KEYS.includes(c)) {
       throw new Error(`Unknown complexity: ${c}`);
     }

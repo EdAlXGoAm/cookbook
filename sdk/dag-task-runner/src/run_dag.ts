@@ -30,8 +30,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 
-import { parseDAG, computeRanks, createModelResolver, validateModelMap } from "./dag.js";
-import type { ModelMapOverride, RawTask } from "./dag.js";
+import { parseDAG, computeRanks, createModelResolver, validateModelMap, sdkModelShapeFromDagPick } from "./dag.js";
+import type { Complexity, ModelMapOverride, RawTask, SdkModelPick } from "./dag.js";
 import {
   CanvasWriter,
   initialRunState,
@@ -273,6 +273,7 @@ async function main(): Promise<void> {
               taskTimeoutMs: args.taskTimeoutMs,
               streamPublishMs: args.streamPublishMs,
               streamIdleTimeoutMs: args.streamIdleTimeoutMs,
+              modelPickFor: modelForComplexity,
             },
           );
         }),
@@ -339,7 +340,7 @@ async function runTask(
 
   const agent = await Agent.create({
     apiKey: process.env.CURSOR_API_KEY!,
-    model: { id: ts.model },
+    model: sdkModelShapeFromDagPick(options.modelPickFor(task.complexity)),
     local: { cwd },
   });
 
@@ -469,6 +470,7 @@ interface RunTaskOptions {
   taskTimeoutMs: number;
   streamPublishMs: number;
   streamIdleTimeoutMs: number;
+  modelPickFor: (c: Complexity) => SdkModelPick;
 }
 
 /** Cap on per-task `resultText` size — applies to live streaming and final state. */
