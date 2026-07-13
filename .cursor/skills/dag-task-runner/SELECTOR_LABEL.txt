@@ -1,0 +1,1 @@
+Cursor SDK — DAG Task Runner (subagentes en grafo con canvas)

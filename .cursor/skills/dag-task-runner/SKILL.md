@@ -1,29 +1,29 @@
 ---
 name: dag-task-runner
-description: Decompose a user's task into a DAG of subtasks and execute them with Cursor SDK local subagents in topological order, rendering live streaming status to a canvas. Each task has a complexity (HIGH/MED/LOW) that maps to a model. Use when the user asks to fan out work, decompose a task into a DAG, run subagents in parallel, or break a large task into a dependency graph.
+description: Descompone la tarea del usuario en un DAG de subtareas y las ejecuta con subagentes locales del Cursor SDK en orden topológico, mostrando estado en streaming en un canvas. Cada tarea tiene complejidad (HIGH/MED/LOW) que mapea a un modelo. Úsalo cuando pidan repartir trabajo, descomponer en DAG, correr subagentes en paralelo o partir una tarea grande en grafo de dependencias.
 ---
 
 # DAG Task Runner
 
-Decomposes a user-described task into a JSON DAG, then runs each node as a Cursor SDK local subagent (with parents' outputs stitched into the child's prompt). Live DAG state — including each running subagent's streaming output — is rendered into a `.canvas.tsx` that the runner rewrites on every status transition; the IDE hot-recompiles so the user sees subagents move through `PENDING -> RUNNING -> FINISHED/ERROR` in real time.
+Descompone una tarea descrita por el usuario en un DAG JSON y ejecuta cada nodo como subagente local del Cursor SDK (con las salidas de los padres cosidas al prompt del hijo). El estado en vivo del DAG — incluido el streaming de cada subagente — se escribe en un `.canvas.tsx` que el runner reescribe en cada transición; el IDE recompila en caliente y se ve el paso `PENDING -> RUNNING -> FINISHED/ERROR`.
 
-This skill can run from either a project skill (`.cursor/skills/dag-task-runner`) or a personal skill (`~/.cursor/skills/dag-task-runner`). The installed runner entry point is `scripts/run_dag.ts` inside the skill directory. Set `DAG_RUNNER_DIR` to override the auto-detected `scripts` directory.
+Esta skill puede vivir como skill de proyecto (`.cursor/skills/dag-task-runner`) o personal (`~/.cursor/skills/dag-task-runner`). El entry point instalado es `scripts/run_dag.ts` dentro del directorio de la skill. Define `DAG_RUNNER_DIR` para sobrescribir el directorio `scripts` auto-detectado.
 
-## When to use
+## Cuándo usar
 
-Trigger when the user says any of:
+Actívala cuando el usuario diga algo como:
 
-- "decompose this task", "break this into a DAG", "fan out subagents"
-- "run this as a graph of subtasks"
-- a multi-step request where some steps clearly depend on others and others can run in parallel
+- "decompose this task", "break this into a DAG", "fan out subagents", "descompón esto en un DAG"
+- "run this as a graph of subtasks" / "ejecuta esto como grafo de subtareas"
+- una petición multi-paso donde unos pasos dependen de otros y otros pueden ir en paralelo
 
-Skip when the task is a single-shot edit, a quick question, or already linear enough that one agent turn would handle it.
+Sáltala si es una edición de un solo tiro, una pregunta rápida, o ya es lo bastante lineal para un solo turno de agente.
 
-## Workflow
+## Flujo
 
-### Step 1 — Generate a DAG JSON
+### Paso 1 — Generar el DAG JSON
 
-You (the parent agent) author the DAG inline using your understanding of the user's task. Schema:
+Tú (el agente padre) redactas el DAG según la tarea. Esquema:
 
 ```json
 {
@@ -44,30 +44,30 @@ You (the parent agent) author the DAG inline using your understanding of the use
 }
 ```
 
-Rules:
+Reglas:
 
-- Every `depends_on` entry must reference another task's `id`.
-- No cycles. The runner rejects cyclic DAGs at parse time.
-- `complexity` controls the model the subagent uses (see table below). Pick `HIGH` for novel/complex reasoning, `MED` for typical implementation, `LOW` for mechanical/lookup tasks.
-- Optional top-level `models` can override the default complexity → model map for this DAG.
-- `subtask_prompt` should read like a standalone request — the runner automatically prepends a short summary of upstream task outputs, so you do not need to repeat them.
-- Do **not** put two tasks that write to the same file in the same rank (siblings within a rank run concurrently and would race).
+- Cada entrada de `depends_on` debe referenciar el `id` de otra tarea.
+- Sin ciclos. El runner rechaza DAGs cíclicos al parsear.
+- `complexity` elige el modelo del subagente (tabla abajo). `HIGH` para razonamiento novedoso/complejo, `MED` para implementación típica, `LOW` para tareas mecánicas/lookup.
+- El `models` de nivel superior opcional puede sobrescribir el mapa complejidad → modelo de este DAG.
+- `subtask_prompt` debe leerse como petición autónoma — el runner antepone un resumen corto de salidas upstream; no hace falta repetirlas.
+- **No** pongas dos tareas que escriban el mismo archivo en el mismo rank (hermanos del mismo rank corren a la vez y harían race).
 
-#### Maximize parallelism — this is the whole point of the runner
+#### Maximizar paralelismo — es el sentido del runner
 
-The runner executes tasks within a rank **concurrently** via `Promise.all`. A linear `A → B → C → D` DAG wastes that capability. Before finalizing the DAG, actively decompose the problem to surface independent work:
+El runner ejecuta tareas del mismo rank **en paralelo** con `Promise.all`. Un DAG lineal `A → B → C → D` desperdicia esa capacidad. Antes de cerrar el DAG, descompón el problema para sacar trabajo independiente:
 
-1. **Default to no dependencies.** Add a `depends_on` entry **only** when the child task literally cannot start without the parent's output. "Logically follows" is not a dependency.
-2. **Split read-only research and discovery into a wide first rank.** Codebase grepping, doc reading, dependency scans, schema lookups, test inventory — these almost always share rank 1 with no edges between them.
-3. **Fan out post-implementation work.** Tests, docs, changelog entries, type updates, lint fixes typically all depend on the same implementation task and on nothing else — put them in one rank, not a chain.
-4. **Use diamonds, not lines.** If two tasks both feed into a third, model that explicitly: rank 1 has the two parents, rank 2 is the merge.
-5. **Same-rank file-write safety.** The one hard constraint: don't put two tasks in the same rank if they would write the same file. Either serialize them with a `depends_on`, or merge them into one task.
+1. **Por defecto, sin dependencias.** Añade `depends_on` **solo** cuando el hijo no puede empezar sin la salida del padre. "Lógicamente sigue" no es dependencia.
+2. **Parte investigación/lectura en un primer rank ancho.** Greps, docs, scans de deps, schemas, inventario de tests — casi siempre van en rank 1 sin aristas entre sí.
+3. **Abre abanico tras la implementación.** Tests, docs, changelog, types, lint suelen depender de la misma tarea de implementación y de nada más — un solo rank, no una cadena.
+4. **Usa diamantes, no líneas.** Si dos tareas alimentan a una tercera, modélalo: rank 1 con los dos padres, rank 2 el merge.
+5. **Seguridad de escritura en el mismo rank.** La restricción dura: no pongas en el mismo rank dos tareas que escriban el mismo archivo. Serialízalas con `depends_on` o fusiónalas en una.
 
-Quality bar: when you sketch the rank structure (rank 1 → rank 2 → …), at least one rank should contain more than one task in any non-trivial problem. If your DAG is a single chain of 1-task ranks, you almost certainly missed parallelism — go back and look again.
+Barra de calidad: al bosquejar ranks (rank 1 → rank 2 → …), al menos un rank debería tener más de una tarea en problemas no triviales. Si tu DAG es una sola cadena de ranks de 1 tarea, casi seguro perdiste paralelismo — vuelve a mirar.
 
-The example shipped with the runner (`examples/example_dag.json`) demonstrates the pattern: rank 1 fans out to two read-only research tasks, rank 2 merges them into a design, rank 3 implements, and rank 4 fans out again to tests + docs.
+El ejemplo del runner (`examples/example_dag.json`) muestra el patrón: rank 1 abre dos investigaciones de solo lectura, rank 2 las fusiona en un diseño, rank 3 implementa, rank 4 abre otra vez a tests + docs.
 
-Write the JSON to a temp file **and immediately generate the initial canvas** so the user can open it while subagents spin up. Run all of the following in a single shell block:
+Escribe el JSON a un temp **y genera de inmediato el canvas inicial** para que el usuario lo abra mientras arrancan los subagentes. Ejecuta todo esto en un solo bloque de shell:
 
 ```bash
 # 0. Locate the runner and pick a canvas path
@@ -115,26 +115,26 @@ JSON
 open "$CANVAS_PATH" >/dev/null 2>&1 || true
 ```
 
-The canvas path is:
+La ruta del canvas es:
 
 ```
 ~/.cursor/projects/<workspace-slug>/canvases/dag-<slug>.canvas.tsx
 ```
 
-`<workspace-slug>` is derived from the cwd's absolute path with `/` and other special chars replaced by `-`. To compute it, take `pwd`, strip the leading `/`, and replace each remaining `/` with `-`. Example: cwd `/Users/me/Code/myapp` → slug `Users-me-Code-myapp`. Use the same `<slug>` you used for the DAG JSON filename so they're easy to correlate.
+`<workspace-slug>` sale del path absoluto del cwd sustituyendo `/` y caracteres especiales por `-`. Toma `pwd`, quita el `/` inicial y reemplaza cada `/` restante por `-`. Ejemplo: cwd `/Users/me/Code/myapp` → slug `Users-me-Code-myapp`. Usa el mismo `<slug>` que en el JSON del DAG para correlacionarlos.
 
-### Step 2 — Surface the canvas link in chat
+### Paso 2 — Enlazar el canvas en el chat
 
-Now that the file exists on disk, post a Markdown hyperlink with the exact text `Open Canvas` and a `file://` URL, plus the absolute path for fallback:
+Con el archivo ya en disco, publica un hipervínculo Markdown con el texto exacto `Open Canvas` y una URL `file://`, más la ruta absoluta de respaldo:
 
 > I created a live canvas: [Open Canvas](file:///Users/<user>/.cursor/projects/<workspace-slug>/canvases/dag-<slug>.canvas.tsx)
 > Fallback path: `/Users/<user>/.cursor/projects/<workspace-slug>/canvases/dag-<slug>.canvas.tsx`
 
-Always use the link text `Open Canvas`. Use the absolute path in both the `file://` URL and fallback path, never `~/`. Do this **before** Step 3 so the user can open the canvas while subagents are still spinning up. The Step 1 shell block already attempts to auto-open the canvas with `open`; if that fails, continue and rely on the chat link.
+Usa siempre el texto de enlace `Open Canvas`. Usa la ruta absoluta en la URL `file://` y en el fallback, nunca `~/`. Hazlo **antes** del Paso 3 para que el usuario abra el canvas mientras arrancan los subagentes. El bloque del Paso 1 ya intenta `open`; si falla, sigue y confía en el enlace del chat.
 
-### Step 3 — Run the DAG
+### Paso 3 — Ejecutar el DAG
 
-Ensure `CURSOR_API_KEY` is set (the runner fails fast if missing), then launch:
+Asegura `CURSOR_API_KEY` (el runner falla rápido si falta) y lanza:
 
 ```bash
 [ -n "$CURSOR_API_KEY" ] || { [ -f .env ] && set -a && source .env && set +a; }
@@ -144,82 +144,82 @@ Ensure `CURSOR_API_KEY` is set (the runner fails fast if missing), then launch:
   --canvas-path "$CANVAS_PATH"
 ```
 
-Same `--canvas-path` as Step 1. The runner:
+Mismo `--canvas-path` que el Paso 1. El runner:
 
-1. Validates the DAG and reuses the existing canvas file.
-2. For each rank (Kahn topo-sort), launches ready tasks concurrently as local Cursor SDK agents and rewrites the canvas as each one transitions, streaming assistant text into each task card live.
-3. Automatically skips tasks whose upstream dependencies failed (marks them `ERROR` with a "Skipped: upstream task(s) … failed" message).
-4. Captures each subagent's final assistant text, status, token usage, and duration.
-5. Writes a final canvas with summary stats.
-6. On SIGINT/SIGTERM/SIGHUP, cancels all in-flight subagents before finalizing the canvas.
+1. Valida el DAG y reutiliza el canvas existente.
+2. Por cada rank (topo-sort de Kahn), lanza tareas listas en paralelo como agentes locales del Cursor SDK y reescribe el canvas en cada transición, streameando texto del assistant a cada tarjeta.
+3. Omite automáticamente tareas cuyo upstream falló (las marca `ERROR` con "Skipped: upstream task(s) … failed").
+4. Captura texto final, status, tokens y duración de cada subagente.
+5. Escribe un canvas final con estadísticas.
+6. Con SIGINT/SIGTERM/SIGHUP, cancela subagentes en vuelo antes de finalizar el canvas.
 
-#### CLI knobs
+#### Knobs de CLI
 
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--models-file <path>` | — | JSON file containing a partial complexity → model override map. |
-| `--task-timeout-ms <ms>` | `1200000` (20 min) | Marks a task `ERROR` if it runs too long. |
-| `--stream-publish-ms <ms>` | `500` | Throttles live canvas streaming writes. |
-| `--stream-idle-timeout-ms <ms>` | `300000` (5 min) | Marks a task `ERROR` if no stream events arrive. |
-| `--debounce <ms>` | `200` | Canvas write debounce interval. |
+| Flag | Default | Uso |
+|------|---------|-----|
+| `--models-file <path>` | — | JSON con override parcial complejidad → modelo. |
+| `--task-timeout-ms <ms>` | `1200000` (20 min) | Marca la tarea `ERROR` si corre demasiado. |
+| `--stream-publish-ms <ms>` | `500` | Throttle de escrituras de streaming al canvas. |
+| `--stream-idle-timeout-ms <ms>` | `300000` (5 min) | Marca `ERROR` si no llegan eventos de stream. |
+| `--debounce <ms>` | `200` | Debounce de escritura del canvas. |
 
-### Step 4 — Summarize
+### Paso 4 — Resumir
 
-After the runner exits, briefly summarize what completed/failed and re-link the canvas with the exact text `[Open Canvas](file:///Users/<user>/.cursor/projects/<workspace-slug>/canvases/dag-<slug>.canvas.tsx)` so the user can scroll back to it. Include the absolute fallback path only if useful.
+Al salir el runner, resume qué completó/falló y vuelve a enlazar el canvas con el texto exacto `[Open Canvas](file:///Users/<user>/.cursor/projects/<workspace-slug>/canvases/dag-<slug>.canvas.tsx)`. Incluye la ruta absoluta de fallback solo si aporta.
 
-## Complexity → model
+## Complejidad → modelo
 
-| Complexity | Model              |
-|------------|--------------------|
-| HIGH       | `gpt-5.3-codex`   |
-| MED        | `composer-2`       |
-| LOW        | `auto-low`         |
+| Complejidad | Modelo             |
+|-------------|--------------------|
+| HIGH        | `gpt-5.3-codex`   |
+| MED         | `composer-2`       |
+| LOW         | `auto-low`         |
 
-Override any subset inline with top-level DAG `models`, or pass a reusable profile with `--models-file <path>`. Precedence is defaults < DAG `models` < `--models-file`. The Cursor SDK model catalog can vary by account; use `Cursor.models.list()` from the SDK docs to confirm available IDs.
+Sobrescribe cualquier subconjunto con `models` en el DAG, o pasa un perfil reutilizable con `--models-file <path>`. Precedencia: defaults < `models` del DAG < `--models-file`. El catálogo de modelos del Cursor SDK puede variar por cuenta; usa `Cursor.models.list()` de la docs del SDK para confirmar IDs.
 
 ## Auth
 
-The runner reads `CURSOR_API_KEY` from the environment. Set it however you usually manage secrets:
+El runner lee `CURSOR_API_KEY` del entorno. Configúralo como suelas gestionar secretos:
 
 ```bash
 export CURSOR_API_KEY=crsr_...
 ```
 
-If the current workspace has a `.env` containing it, source that first:
+Si el workspace tiene un `.env` con la clave, fuente primero:
 
 ```bash
 set -a && source .env && set +a
 ```
 
-## CLI options
+## Opciones CLI
 
-| Flag                        | Default              | Notes                                                                              |
+| Flag                        | Default              | Notas                                                                              |
 |-----------------------------|----------------------|------------------------------------------------------------------------------------|
-| `--dag`                     | required             | Path to the DAG JSON file.                                                         |
-| `--canvas-path`             | composed from below  | Full absolute path to the canvas file. Preferred — used by the parent-managed flow.|
-| `--canvas`                  | —                    | Canvas filename stem (no `.canvas.tsx`). Used only if `--canvas-path` is omitted.   |
-| `--canvases-dir`            | derived from cwd     | Override the canvases output directory. Used only with `--canvas`.                 |
-| `--cwd`                     | `process.cwd()`      | Working dir each subagent operates in.                                             |
-| `--models-file`             | —                    | JSON file containing a partial complexity → model override map.                    |
-| `--debounce`                | `200` (ms)           | Canvas write debounce interval.                                                    |
-| `--init-only`               | `false`              | Write the initial all-`PENDING` canvas and exit. No `CURSOR_API_KEY` required.     |
-| `--task-timeout-ms`         | `1200000` (20 min)   | Marks a task `ERROR` if it exceeds this duration.                                  |
-| `--stream-publish-ms`       | `500` (ms)           | Throttles live canvas streaming writes to avoid excessive cloning.                 |
-| `--stream-idle-timeout-ms`  | `300000` (5 min)     | Marks a task `ERROR` if no stream events arrive within this window.                |
+| `--dag`                     | required             | Ruta al JSON del DAG.                                                              |
+| `--canvas-path`             | composed from below  | Ruta absoluta completa al canvas. Preferida — flujo gestionado por el padre.        |
+| `--canvas`                  | —                    | Stem del nombre del canvas (sin `.canvas.tsx`). Solo si no hay `--canvas-path`.     |
+| `--canvases-dir`            | derived from cwd     | Override del directorio de canvases. Solo con `--canvas`.                          |
+| `--cwd`                     | `process.cwd()`      | Working dir de cada subagente.                                                     |
+| `--models-file`             | —                    | JSON con override parcial complejidad → modelo.                                    |
+| `--debounce`                | `200` (ms)           | Debounce de escritura del canvas.                                                  |
+| `--init-only`               | `false`              | Escribe canvas inicial todo-`PENDING` y sale. No requiere `CURSOR_API_KEY`.        |
+| `--task-timeout-ms`         | `1200000` (20 min)   | Marca `ERROR` si supera esta duración.                                             |
+| `--stream-publish-ms`       | `500` (ms)           | Throttle de streaming al canvas.                                                   |
+| `--stream-idle-timeout-ms`  | `300000` (5 min)     | Marca `ERROR` si no llegan eventos de stream en esta ventana.                      |
 
-## Caveats
+## Limitaciones
 
-- Local runtime only — every subagent runs against `--cwd` (defaults to wherever you invoke the runner).
-- Sibling tasks in the same rank run in parallel; do not let them write the same files.
-- Inline MCP servers and sub-sub-agents are not configured by this runner.
-- A failed task automatically skips all downstream dependents (they are marked `ERROR` with a "Skipped: upstream task(s) … failed" message). This prevents wasted API calls on tasks whose inputs are missing.
-- Per-task streamed text is capped at `STREAM_CAP = 4000` chars to keep the canvas file modest. Upstream context passed to child tasks is capped at 2000 chars per parent.
-- Timed-out tasks are marked `ERROR` instead of staying indefinitely in `RUNNING`.
-- SIGINT/SIGTERM/SIGHUP gracefully cancel all in-flight subagents and finalize the canvas before exiting.
-- Unexpected unhandled rejections from SDK internals are suppressed to prevent runner crashes; uncaught exceptions are logged and trigger a clean shutdown.
+- Solo runtime local — cada subagente opera sobre `--cwd` (por defecto donde invocaste el runner).
+- Hermanos del mismo rank van en paralelo; no dejes que escriban los mismos archivos.
+- Este runner no configura MCP servers inline ni sub-sub-agentes.
+- Una tarea fallida omite automáticamente a todos los dependientes downstream (marcados `ERROR` con "Skipped: upstream task(s) … failed"). Evita llamadas API inútiles sin inputs.
+- El texto streameado por tarea está limitado a `STREAM_CAP = 4000` chars. El contexto upstream al hijo a 2000 chars por padre.
+- Timeouts marcan `ERROR` en vez de quedarse en `RUNNING` indefinidamente.
+- SIGINT/SIGTERM/SIGHUP cancelan subagentes en vuelo y finalizan el canvas antes de salir.
+- Rechazos no manejados inesperados del SDK se suprimen para no tumbar el runner; excepciones no capturadas se loguean y disparan shutdown limpio.
 
-## Reference
+## Referencia
 
-- DAG schema example: `examples/example_dag.json` (sibling of this skill after install)
-- Runner entry point after install: `run_dag.ts` inside `$RUNNER_DIR`
-- Cursor SDK docs: https://cursor.com/docs/api/sdk/typescript
+- Ejemplo de esquema DAG: `examples/example_dag.json` (hermano de esta skill tras instalar)
+- Entry point del runner: `run_dag.ts` dentro de `$RUNNER_DIR`
+- Docs Cursor SDK: https://cursor.com/docs/api/sdk/typescript
